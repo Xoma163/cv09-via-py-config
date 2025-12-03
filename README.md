@@ -16,10 +16,10 @@ single Python script with my settings.
    pip install -r requirements.txt
    ```
 4. [Optional] Add your device definition to the `device/` directory.
-5. Edit the `main()` function in `set_layout_and_lighting.py` to set your device and layout.
+5. Edit the `main()` function in `main.py` to set your device and layout.
 6. Run the project:
    ```bash
-   python set_layout_and_lighting.py
+   python main.py
    ```
 7. Check layout in `VIA`, check lighting visually
 

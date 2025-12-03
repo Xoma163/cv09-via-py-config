@@ -4,7 +4,7 @@ import time
 from pywinusb import hid
 
 from device.device import Device
-from device.cv09.device import CV09
+from utils import rgb_to_hhss
 
 
 class HIDDevice:
@@ -54,7 +54,14 @@ class HIDDevice:
 
     def commit(self):
         print("Committing to device...")
-        self.send(bytes([self.device.CMD_COMMIT, 0x03, 0x00, 0x00]))
+        # CV09 Protocol: [09 03]
+        self.send(bytes([self.device.CMD_COMMIT, 0x03]))
+        time.sleep(1)
+
+    def factory_reset(self):
+        print("Factory reset...")
+        # CV09 Protocol: [09 06]
+        self.send(bytes([self.device.CMD_COMMIT, 0x06]))
         time.sleep(1)
 
     def close(self):
@@ -124,7 +131,7 @@ class HIDSetter:
         self.hid_device.send(payload)
 
     def set_lighting(self, addr: int, val: int):
-        # CV09 Protocol: [CMD_SET_LIGHTING, page, addr, val_hi, val_lo]
+        # CV09 Protocol: [07, page, addr, val_hi, val_lo]
         page = 0x03
         payload = struct.pack(
             ">BBBH",
@@ -153,67 +160,5 @@ class HIDSetter:
         self.set_lighting(self.ADDR_EFFECT_SPEED, 0x0000)  # val 0x0000 - 0x00ff
 
     def set_color(self, r: int, g: int, b: int):
-        val = self.rgb_to_hhss(r, g, b)
+        val = rgb_to_hhss(r, g, b)
         self.set_lighting(self.ADDR_COLOR_PACKED, val)  # val 0x0000 - 0xffff
-
-    @staticmethod
-    def rgb_to_hhss(r, g, b):
-        """
-        RGB (0..255 each) -> 16-bit 0xHHSS (Hue byte, Saturation byte), Value assumed = 255.
-        No libraries.
-        """
-        # Clamp
-        r = max(0, min(255, int(r)))
-        g = max(0, min(255, int(g)))
-        b = max(0, min(255, int(b)))
-
-        # Normalize to 0..1
-        r1, g1, b1 = r / 255.0, g / 255.0, b / 255.0
-        cmax = max(r1, g1, b1)
-        cmin = min(r1, g1, b1)
-        delta = cmax - cmin
-
-        # Hue in [0,1)
-        if delta == 0:
-            h = 0.0
-        elif cmax == r1:
-            h = ((g1 - b1) / delta) % 6.0
-        elif cmax == g1:
-            h = (b1 - r1) / delta + 2.0
-        else:
-            h = (r1 - g1) / delta + 4.0
-        h = (h / 6.0) % 1.0  # normalize
-
-        # Saturation in [0,1]
-        s = 0.0 if cmax == 0 else (delta / cmax)
-
-        # Map to bytes
-        H = int(round(h * 255)) % 256  # wrap 1.0 -> 0
-        S = int(round(s * 255))
-        return (H << 8) | S
-
-
-def main():
-    device = CV09
-
-    # we can provide str - keys from keycodes
-    # and int - raw bytes
-    layout = [
-        [
-            "KC_PSCR", "KC_F13", "KC_CALC",
-            "KC_F15", "KC_F17", "KC_F18",
-            "KC_F14", "KC_F16", "CUSTOM_FN(1)"
-        ],
-        [
-            "KC_VOLU", "MACRO_M0", "KC_NO",
-            "KC_VOLD", "KC_NO", "KC_NO",
-            "KC_MPLY", "KC_NO", "CUSTOM_FN(0)"
-        ]
-    ]
-
-    hid_setter = HIDSetter(device, layout)
-    hid_setter.start()
-
-
-if __name__ == "__main__":
-    main()
