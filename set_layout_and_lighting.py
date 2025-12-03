@@ -1,95 +1,130 @@
+import struct
+import time
+
 from pywinusb import hid
-import struct, time
 
 from device.device import Device
-from device.cv09.cv09 import CV09
+from device.cv09.device import CV09
 
 
 class HIDDevice:
-    def __init__(self, device: Device):
+    def __init__(self, device: type[Device]):
         self.device = device
-        self.d = None
-        self.out_rep = None
-        self.out_len = None
 
-        self._open_iface()
+        self.hid_device = None
+        self.output_report = None
+        self.output_len = None
+        self._open_interface()
 
-    def _open_iface(self):
+    def _open_interface(self):
         print("Opening interface...")
-        devices = hid.HidDeviceFilter(vendor_id=self.device.vid, product_id=self.device.pid).get_devices()
-        if not devices:
+        hid_devices = hid.HidDeviceFilter(vendor_id=self.device.vid, product_id=self.device.pid).get_devices()
+        if not hid_devices:
             raise RuntimeError(f"{self.device.name} not found")
-        for device in devices:
-            device.open()
-            outs = device.find_output_reports()
-            if outs and device.hid_caps.output_report_byte_length >= self.device.output_report_byte_length:
-                self.d = device
-                self.out_rep = outs[0]
-                self.out_len = device.hid_caps.output_report_byte_length
+
+        for hid_device in hid_devices:
+            hid_device.open()
+            outs = hid_device.find_output_reports()
+            if outs and hid_device.hid_caps.output_report_byte_length >= self.device.output_report_byte_length:
+                self.hid_device = hid_device
+                self.output_report = outs[0]
+                self.output_len = hid_device.hid_caps.output_report_byte_length
                 return
-            device.close()
+            hid_device.close()
+
         raise RuntimeError(
             f"No suitable Output report (need ≥{self.device.output_report_byte_length} bytes including report_id)"
         )
 
-    def send(self, payload: bytes, delay=0.003):
-        data_bytes = self.out_len - 1
-        # first byte always report_id, then payload bytes, then zeros
-        raw = [self.out_rep.report_id] + list(payload[:data_bytes]) + [0] * (data_bytes - min(len(payload), data_bytes))
-        self.out_rep.set_raw_data(raw)
-        self.out_rep.send()
+    def send(self, payload: bytes, delay: float = 0.003):
+        if not self.output_report:
+            raise RuntimeError("Output report is not initialized.")
+        data_bytes = self.output_len - 1
+
+        # first byte always report_id
+        raw = [self.output_report.report_id]
+        # then payload bytes
+        raw.extend(payload[:data_bytes])
+        # then zeros
+        raw.extend([0] * (data_bytes - min(len(payload), data_bytes)))
+
+        self.output_report.set_raw_data(raw)
+        self.output_report.send()
         time.sleep(delay)
 
     def commit(self):
+        print("Committing to device...")
         self.send(bytes([self.device.CMD_COMMIT, 0x03, 0x00, 0x00]))
-        time.sleep(1)  # min 0.6 - works
+        time.sleep(1)
+
+    def close(self):
+        print("Closing device...")
+        if self.hid_device:
+            self.hid_device.close()
+            self.hid_device = None
+            self.output_report = None
+            self.output_len = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
 
 class HIDSetter:
-    ADDR_BRIGHTNESS = 1  # 0..255  (8 bit)
-    ADDR_EFFECT = 2  # 1..6 effects (8 bit)
-    ADDR_EFFECT_SPEED = 3  # 0..255 (8 bit)
-    ADDR_COLOR_PACKED = 4  # color (16-bit)
+    ADDR_BRIGHTNESS = 1
+    ADDR_EFFECT = 2
+    ADDR_EFFECT_SPEED = 3
+    ADDR_COLOR_PACKED = 4
 
-    def __init__(self, device: Device, layout: list[list[str]]):
-        self.device: Device = device
+    def __init__(self, device: type[Device], layout: list[list[str]]):
+        self.device: type[Device] = device
         self.layout: list[list[str]] = layout
-
-        self.hid_device = HIDDevice(self.device)
+        self.hid_device: HIDDevice | None = None
 
     def start(self):
-        try:
-            self.set_layout()
-            self.turn_off_lighting()
-            print("Done")
-        finally:
-            self.hid_device.d.close()
+        with HIDDevice(self.device) as hid:
+            self.hid_device = hid
+            try:
+                self.set_layout()
+                self.turn_off_lighting()
+                self.hid_device.commit()
+            finally:
+                self.hid_device = None
 
     def set_layout(self):
+        if not self.hid_device:
+            raise RuntimeError("HID device is not initialized.")
+        keycodes = self.device.keycodes()
         for i, layer in enumerate(self.layout):
             print(f"Writing layer #{i}...")
-            self.set_layer(layer_number=i, keys=layer, keycodes=self.device.keycodes())
-        # self.hid_device.commit()
+            self.set_layer(layer_number=i, keys=layer, keycodes=keycodes)
 
-    def set_layer(self, layer_number: int, keys: list[str], keycodes: dict[str, bytes]):
-        for idx, name in enumerate(keys):
-            self.set_key_by_index(layer_number, idx, keycodes.get(name, 0))
+    def set_layer(self, layer_number: int, keys: list[str], keycodes: dict[str, int]):
+        for idx, keycode_str in enumerate(keys):
+            if isinstance(keycode_str, int):
+                keycode = keycode_str
+            else:
+                if keycode_str not in keycodes:
+                    raise KeyError(f"Keycode {keycode_str} is not supported.")
+                keycode = keycodes.get(keycode_str, 0)
+            self.set_key_by_index(layer_number, idx, keycode)
 
-    # ToDo: is this works only to CV09? idk
     def set_key_by_index(self, layer: int, index: int, keycode: int):
-        # [05, layer, 00, index, key_hi, key_lo]
+        # CV09 Protocol: [05, layer, 00, index, key_hi, key_lo]
         payload = struct.pack(
             ">BBBBH",
             self.device.CMD_SET_KEY,
             layer & 0xFF,
             0x00,
             index & 0xFF,
-            keycode & 0xFFFF
+            keycode & 0xFFFF,
         )
         self.hid_device.send(payload)
 
-    def set_lighting(self, addr, val):
-        # [07, page, addr, val_hi, val_lo];
+    def set_lighting(self, addr: int, val: int):
+        # CV09 Protocol: [CMD_SET_LIGHTING, page, addr, val_hi, val_lo]
         page = 0x03
         payload = struct.pack(
             ">BBBH",
@@ -104,11 +139,9 @@ class HIDSetter:
         print("Turning off lighting...")
         self.set_lighting(self.ADDR_EFFECT, 0x0000)  # All Off
         self.set_lighting(self.ADDR_BRIGHTNESS, 0x0000)  # Brightness 0
-        self.hid_device.commit()
 
     def set_brightness(self):
         self.set_lighting(self.ADDR_BRIGHTNESS, 0x0000)  # val 0x0000 - 0x00ff
-        self.hid_device.commit()
 
     def set_mode(self):
         self.set_lighting(self.ADDR_EFFECT, 0x0000)  # val 0x0000 - 0x0006
@@ -147,7 +180,7 @@ class HIDSetter:
             h = ((g1 - b1) / delta) % 6.0
         elif cmax == g1:
             h = (b1 - r1) / delta + 2.0
-        else:  # cmax == b1
+        else:
             h = (r1 - g1) / delta + 4.0
         h = (h / 6.0) % 1.0  # normalize
 
@@ -162,6 +195,9 @@ class HIDSetter:
 
 def main():
     device = CV09
+
+    # we can provide str - keys from keycodes
+    # and int - raw bytes
     layout = [
         [
             "KC_PSCR", "KC_F13", "KC_CALC",
@@ -169,7 +205,7 @@ def main():
             "KC_F14", "KC_F16", "CUSTOM_FN(1)"
         ],
         [
-            "KC_VOLU", "KC_NO", "KC_NO",
+            "KC_VOLU", "MACRO_M0", "KC_NO",
             "KC_VOLD", "KC_NO", "KC_NO",
             "KC_MPLY", "KC_NO", "CUSTOM_FN(0)"
         ]

@@ -17,7 +17,7 @@ class Device:
     CMD_COMMIT: int
 
     @classmethod
-    def keycodes(cls) -> dict[str, bytes]:
+    def keycodes(cls) -> dict[str, int]:
         with open(cls.keycodes_file) as f:
             data = json.load(f)
         for k, v in data.items():

@@ -476,6 +476,12 @@
   "FN_MO13": "0x7c77",
   "FN_MO23": "0x7c78",
 
+  "MACRO_M0": "0x7700",
+  "MACRO_M1": "0x7701",
+  "MACRO_M2": "0x7702",
+  "MACRO_M3": "0x7703",
+  "MACRO_M4": "0x7704",
+
   "CUSTOM_DIAL_MINUS": "0x7e00",
   "CUSTOM_DIAL_BUTTON": "0x7e01",
   "CUSTOM_DIAL_PLUS": "0x7e02",
