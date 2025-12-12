@@ -47,7 +47,8 @@ class HIDDevice:
         raw.extend(payload[:data_bytes])
         # then zeros
         raw.extend([0] * (data_bytes - min(len(payload), data_bytes)))
-
+        _raw_bytes_hex_str = ', '.join(f"0x{b:02x}" for b in raw)
+        print(f"Sending {_raw_bytes_hex_str}")
         self.output_report.set_raw_data(raw)
         self.output_report.send()
         time.sleep(delay)
@@ -91,8 +92,8 @@ class HIDSetter:
         self.hid_device: HIDDevice | None = None
 
     def start(self):
-        with HIDDevice(self.device) as hid:
-            self.hid_device = hid
+        with HIDDevice(self.device) as _hid:
+            self.hid_device = _hid
             try:
                 self.set_layout()
                 self.turn_off_lighting()
